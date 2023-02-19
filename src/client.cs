@@ -56,7 +56,7 @@ namespace Meta {
                 } );
 
                 using var response = await _httpClient.PostAsync( url, content, cancellationToken );
-                var jsonResponse = await response.Content.ReadAsStringAsync( );
+                var jsonResponse = await response.Content.ReadAsStringAsync( cancellationToken );
 
                 var result = Newtonsoft.Json.JsonConvert.DeserializeObject< CustomAudienceCreatedResponse >( jsonResponse );
 
@@ -121,22 +121,78 @@ namespace Meta {
                     data.Add( d );
                 }
 
-                var payload = new Dictionary< string, object >( );
+                if( users.Length <= _maxUsersPerCustomAudienceBatch ) {
+                    var payload = new Dictionary< string, object >( );
 
-                payload[ "schema" ] = schemas;
-                payload[ "data" ] = data;
+                    payload[ "schema" ] = schemas;
+                    payload[ "data" ] = data;
                 
-                string url = $"https://graph.facebook.com/v16.0/{customAudienceId}/users";
+                    string url = $"https://graph.facebook.com/v16.0/{customAudienceId}/users";
 
-                var content = new FormUrlEncodedContent( new Dictionary< string, string >( ) { 
-                    { "payload", Newtonsoft.Json.JsonConvert.SerializeObject( payload ) },
-                    { "access_token", _accessToken },
-                } );
+                    var content = new FormUrlEncodedContent( new Dictionary< string, string >( ) { 
+                        { "payload", Newtonsoft.Json.JsonConvert.SerializeObject( payload ) },
+                        { "access_token", _accessToken },
+                    } );
 
-                using var result = await _httpClient.PostAsync( url, content, cancellationToken );
-                string responseJsonData = await result.Content.ReadAsStringAsync( cancellationToken );
+                    using var result = await _httpClient.PostAsync( url, content, cancellationToken );
+                    string responseJsonData = await result.Content.ReadAsStringAsync( cancellationToken );
+                
+                    var response = Newtonsoft.Json.JsonConvert.DeserializeObject< AddUsersToCustomAudienceResponse >( responseJsonData );
 
-                //var response = Newtonsoft.Json.JsonConvert.DeserializeObject< AddUsersToCustomAudienceResponse >( responseJsonData );
+                } else {
+                    int remainingUsersCount = data.Count;
+                    int currentIndex = 0;
+                    int currentBatchId = 1;
+
+                    var rnd = new Random( );
+                    int sessionId = rnd.Next( );
+
+                    while( remainingUsersCount > 0 ) {
+                        bool lastBatch = remainingUsersCount < _maxUsersPerCustomAudienceBatch;
+
+                        int thisChunkSize = remainingUsersCount;
+                        if( thisChunkSize > _maxUsersPerCustomAudienceBatch )
+                            thisChunkSize = _maxUsersPerCustomAudienceBatch;
+
+                        var chunkData = new List< List< string > >( thisChunkSize );
+
+                        for( int j = 0; j < thisChunkSize; ++j )
+                            chunkData.Add( data[ currentIndex + j ] );
+
+                        currentIndex += thisChunkSize;
+                        remainingUsersCount -= thisChunkSize;
+
+                        var payload = new Dictionary< string, object >( );
+
+                        payload[ "schema" ] = schemas;
+                        payload[ "data" ] = chunkData;
+                
+                        var session = new {
+                            session_id = sessionId,
+                            batch_seq = currentBatchId,
+                            last_batch_flag = lastBatch,
+                            estimated_num_total = users.Length,
+                        };
+
+                        ++currentBatchId;
+
+                        string url = $"https://graph.facebook.com/v16.0/{customAudienceId}/users";
+
+                        var content = new FormUrlEncodedContent( new Dictionary< string, string >( ) { 
+                            { "payload", Newtonsoft.Json.JsonConvert.SerializeObject( payload ) },
+                            { "access_token", _accessToken },
+                            { "session", Newtonsoft.Json.JsonConvert.SerializeObject( session ) },
+                        } );
+
+                        using var result = await _httpClient.PostAsync( url, content, cancellationToken );
+                        string responseJsonData = await result.Content.ReadAsStringAsync( cancellationToken );
+                
+                        var response = Newtonsoft.Json.JsonConvert.DeserializeObject< AddUsersToCustomAudienceResponse >( responseJsonData );
+
+                    }
+
+                }
+
             }
 
             static string SHA256Hash( string value ) {
@@ -174,6 +230,8 @@ namespace Meta {
             string _accessToken;
 
             HttpClient _httpClient = new HttpClient( );
+
+            const int _maxUsersPerCustomAudienceBatch = 10000;
         }
     }
 }

@@ -18,7 +18,7 @@ namespace Meta {
             [ JsonProperty( "description" ) ] public string Description;
         }
 
-        public class Client {
+        public class Client : IDisposable {
             public Client( string accountId, string accessToken ) {
                 _accountId = accountId;
                 _accessToken = accessToken;
@@ -28,6 +28,8 @@ namespace Meta {
                 string url = $"https://graph.facebook.com/v16.0/act_{_accountId}/customaudiences?fields=id,name,description&access_token={_accessToken}";
 
                 using var response = await _httpClient.GetAsync( url, cancellationToken );
+
+                response.EnsureSuccessStatusCode( );
 
                 string responseJsonData = await response.Content.ReadAsStringAsync( cancellationToken );
 
@@ -56,6 +58,9 @@ namespace Meta {
                 } );
 
                 using var response = await _httpClient.PostAsync( url, content, cancellationToken );
+                
+                response.EnsureSuccessStatusCode( );
+
                 var jsonResponse = await response.Content.ReadAsStringAsync( cancellationToken );
 
                 var result = Newtonsoft.Json.JsonConvert.DeserializeObject< CustomAudienceCreatedResponse >( jsonResponse );
@@ -135,6 +140,9 @@ namespace Meta {
                     } );
 
                     using var result = await _httpClient.PostAsync( url, content, cancellationToken );
+
+                    result.EnsureSuccessStatusCode( );
+
                     string responseJsonData = await result.Content.ReadAsStringAsync( cancellationToken );
                 
                     var response = Newtonsoft.Json.JsonConvert.DeserializeObject< AddUsersToCustomAudienceResponse >( responseJsonData );
@@ -185,6 +193,9 @@ namespace Meta {
                         } );
 
                         using var result = await _httpClient.PostAsync( url, content, cancellationToken );
+                        
+                        result.EnsureSuccessStatusCode( );
+
                         string responseJsonData = await result.Content.ReadAsStringAsync( cancellationToken );
                 
                         var response = Newtonsoft.Json.JsonConvert.DeserializeObject< AddUsersToCustomAudienceResponse >( responseJsonData );
@@ -193,6 +204,10 @@ namespace Meta {
 
                 }
 
+            }
+
+            void IDisposable.Dispose( ) {
+                _httpClient.Dispose( );
             }
 
             static string SHA256Hash( string value ) {
@@ -208,6 +223,7 @@ namespace Meta {
 
                 return sb.ToString( );
             }
+
 
             struct CustomAudienceCreatedResponse {
                 [ JsonProperty( "id" ) ] public string Id;

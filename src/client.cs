@@ -1,8 +1,10 @@
 ﻿using Newtonsoft.Json;
+using System;
 using System.Text;
 using System.Text.Json.Serialization;
 using System.Threading;
 using System.Xml.Linq;
+using static System.Runtime.InteropServices.JavaScript.JSType;
 
 namespace Meta {
     namespace Marketing {
@@ -22,6 +24,31 @@ namespace Meta {
             public Client( string accountId, string accessToken ) {
                 _accountId = accountId;
                 _accessToken = accessToken;
+            }
+
+            public async Task< dynamic > RetreiveInsights( DateTime from, DateTime to, string filter, string [ ]fields, CancellationToken cancellationToken = default ) {
+                string query = $"https://graph.facebook.com/v16.0/{filter}/insights?";
+
+                query += $"access_token={_accessToken}";
+  
+                query += $"&time_range[since]=" + from.Year + "-" + from.Month + "-" + from.Day;
+                query += $"&time_range[until]=" + to.Year + "-" + to.Month + "-" + to.Day;
+
+                if( fields.Length > 0 ) {
+                    query += "&fields=" + fields[ 0 ];
+    
+                    for( var i = 1; i < fields.Length; ++i )
+                      query += "," + fields[ i ];
+                }
+
+                using var response = await _httpClient.GetAsync( query, cancellationToken );
+
+                response.EnsureSuccessStatusCode( );
+
+                string responseJsonData = await response.Content.ReadAsStringAsync( cancellationToken );
+
+                dynamic data = Newtonsoft.Json.JsonConvert.DeserializeObject( responseJsonData );
+                return data;
             }
 
             public async Task< AudienceInfo[ ] > EnumerateCustomAudiences( CancellationToken cancellationToken = default ) {

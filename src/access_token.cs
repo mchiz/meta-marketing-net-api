@@ -15,16 +15,16 @@ namespace Meta {
         }
 
         public static class AccessTokenHelper {
-            public static async Task< AccessToken > GetNewAccessToken( string appId, string appSecret, string currentToken ) {
+            public static async Task< AccessToken > GetNewAccessToken( string appId, string appSecret, string currentToken, CancellationToken cancellationToken = default ) {
                 string query = $"https://graph.facebook.com/oauth/access_token?client_id={appId}&client_secret={appSecret}&grant_type=fb_exchange_token&fb_exchange_token={currentToken}";
 
                 var httpClient = new HttpClient( );
 
-                var response = await httpClient.GetAsync( query );
+                var response = await httpClient.GetAsync( query, cancellationToken );
 
                 response.EnsureSuccessStatusCode( );
 
-                var jsonData = await response.Content.ReadAsStringAsync( );
+                var jsonData = await response.Content.ReadAsStringAsync( cancellationToken );
 
                 var data = JsonConvert.DeserializeObject< dynamic >( jsonData );
 

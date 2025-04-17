@@ -1,5 +1,7 @@
-﻿using Newtonsoft.Json;
+﻿using Microsoft.CSharp.RuntimeBinder;
+using Newtonsoft.Json;
 using System;
+using System.ComponentModel;
 using System.Text;
 using System.Text.Json.Serialization;
 using System.Threading;
@@ -20,16 +22,85 @@ namespace Meta {
             [ JsonProperty( "description" ) ] public string Description;
         }
 
+        public struct Insights {
+            public double Spend;
+            public ulong Impressions;
+            public ulong Reach;
+
+            public ulong OutboundClicks;
+            public ulong LinkClick;
+            public ulong LeadsCount;
+            public ulong ConversionsCount;
+            public ulong PostReaction;
+
+        }
+
         public class Client : IDisposable {
             public Client( string accountId, string accessToken ) {
                 _accountId = accountId;
-                _accessToken = accessToken;
+                AccessToken = accessToken;
             }
 
-            public async Task< dynamic > RetreiveInsights( DateTime from, DateTime to, string filter, string [ ]fields, CancellationToken cancellationToken = default ) {
-                string query = $"https://graph.facebook.com/v16.0/{filter}/insights?";
+            public async Task RetreiveLeadFormLeads( string leadFormId, CancellationToken cancellationToken = default ) {
+                var long_lived_page_access_token = "EAAj93xsZC3yEBAEVVg3QlVqHqITnDW6vE2Obc8AZBtI9Wh0rIoDzms8jbJXVxMM4Vzu9ZBmZCslBLmkn2Ydte7eGEdXhQdXPMSZADSuswitTLV29Rn1EczZCMu63LTal9RkwsSJlIQHjWXlDWD9xOifuhTKmCYZCWaVYkIYkfGDpkyOcrftF5NrJoviy20GPj3yS9ErG2E7MgZDZD";
 
-                query += $"access_token={_accessToken}";
+                var lead_data_endpoint = $"https://graph.facebook.com/v20.0/{leadFormId}/leads?access_token=" + long_lived_page_access_token;
+                var lead_data_response = await _httpClient.GetAsync( lead_data_endpoint, cancellationToken );
+                var lead_raw_data = Newtonsoft.Json.JsonConvert.DeserializeObject< dynamic >( await lead_data_response.Content.ReadAsStringAsync( cancellationToken ) );
+                var lead_data = lead_raw_data.data;
+
+                var initial = true;
+                var to_proceed = true;
+                var subsequent_api_endpoint = "";
+
+                while( to_proceed ) {
+                  // Trigger another Graph API call to paginate to the next page
+                  if ( !initial && !string.IsNullOrEmpty( subsequent_api_endpoint ) ) {
+                    lead_data_response = await _httpClient.GetAsync( subsequent_api_endpoint, cancellationToken );
+                    lead_raw_data = Newtonsoft.Json.JsonConvert.DeserializeObject< dynamic >( await lead_data_response.Content.ReadAsStringAsync( cancellationToken ) );
+                    lead_data = lead_raw_data.data;
+                  }
+
+                  // Process all of the leads in this page (one page contains 25 leads)
+                  for( var z = 0; z < lead_data.length; z++ ) {
+                    // Get current lead information
+                    var current_lead = lead_data[z];
+                    var field_data = current_lead.field_data;
+                    var final_lead_information = new Dictionary< string, string >( );
+
+                    // Compile all data in an object
+                    for( var x = 0; x < field_data.length; x++ ) {
+                      final_lead_information[field_data[x].name] = field_data[x].values[0];
+                    }
+
+                    // Get the date and time we received the lead
+                    //var d = new Date( current_lead.created_time );
+                    //var submitted_at = d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate() + ' ' + d.getHours() + ':' + d.getMinutes() + ':' + d.getSeconds();
+                    //final_lead_information['submitted_at'] = submitted_at;
+
+                    // Arrange them in the proper order
+                    var final_order = new List< string >( );
+                    var format_order = new string[ ] {"full_name", "phone_number", "email", "company_name", "job_title", "submitted_at" } ;
+                    for( var y = 0; y < format_order.Length; y++ ) {
+                       final_order.Add(final_lead_information[format_order[y]]);
+                    }
+
+                    // Record it in the Google Sheets
+                    //active_sheet.appendRow(final_order);
+
+                  }
+
+                  subsequent_api_endpoint = lead_raw_data["paging"]["next"] != null ? lead_raw_data["paging"]["next"] : "";
+                  to_proceed = lead_raw_data["paging"]["next"] != null;
+
+                  initial = false;
+                }
+            }
+
+            public async Task< Insights > RetreiveInsights( DateTime from, DateTime to, string filter, string [ ]fields, CancellationToken cancellationToken = default ) {
+                string query = $"https://graph.facebook.com/v20.0/{filter}/insights?";
+
+                query += $"access_token={AccessToken}";
   
                 query += $"&time_range[since]=" + from.Year + "-" + from.Month + "-" + from.Day;
                 query += $"&time_range[until]=" + to.Year + "-" + to.Month + "-" + to.Day;
@@ -47,12 +118,51 @@ namespace Meta {
 
                 string responseJsonData = await response.Content.ReadAsStringAsync( cancellationToken );
 
-                dynamic data = Newtonsoft.Json.JsonConvert.DeserializeObject( responseJsonData );
-                return data;
+                var result = new Insights( );
+
+                var data = Newtonsoft.Json.JsonConvert.DeserializeObject< InsightsResponse >( responseJsonData );
+                
+                if( data.Data.Length == 0 )
+                    return result;
+
+                var d = data.Data[ 0 ];
+                
+                result.Spend = d.Spend;
+                result.Impressions = d.Impressions;
+                result.Reach = d.Reach;
+
+                if( d.Actions != null ) {
+                    for( int i = 0; i < d.Actions.Length; ++i ) {
+                        var a = d.Actions[ i ];
+
+                        switch( a.ActionType ) {
+                            case "link_click": result.LinkClick = a.Value; break;
+                            case "lead": result.LeadsCount = a.Value; break;
+                            case "post_reaction": result.PostReaction = a.Value; break;
+                            default:
+                                if( a.ActionType.Contains( "onsite_conversion" )
+                                 || a.ActionType.Contains( "offsite_conversion" ) )
+                                    result.ConversionsCount += a.Value;
+                                break;
+                        }
+                    }
+                }
+
+                if( d.OutboundClicks != null ) {
+                    for( int i = 0; i < d.OutboundClicks.Length; ++i ) {
+                        var a = d.OutboundClicks[ i ];
+
+                        switch( a.ActionType ) {
+                            case "outbound_click": result.OutboundClicks = a.Value; break;
+                        }
+                    }
+                }
+
+                return result;
             }
 
             public async Task< AudienceInfo[ ] > EnumerateCustomAudiences( CancellationToken cancellationToken = default ) {
-                string url = $"https://graph.facebook.com/v16.0/act_{_accountId}/customaudiences?fields=id,name,description&access_token={_accessToken}";
+                string url = $"https://graph.facebook.com/v20.0/act_{_accountId}/customaudiences?fields=id,name,description&access_token={AccessToken}";
 
                 using var response = await _httpClient.GetAsync( url, cancellationToken );
 
@@ -66,7 +176,7 @@ namespace Meta {
             }
 
             public async Task< AudienceInfo > CreateCustomAudience( string name, string description, CustomAudienceSource cas, CancellationToken cancellationToken = default ) {
-                string url = $"https://graph.facebook.com/v16.0/act_{_accountId}/customaudiences";
+                string url = $"https://graph.facebook.com/v20.0/act_{_accountId}/customaudiences";
 
                 string cfs = "";
 
@@ -81,7 +191,7 @@ namespace Meta {
                     { "subtype", "CUSTOM" },
                     { "description", description },
                     { "customer_file_source", cfs },
-                    { "access_token", _accessToken },
+                    { "access_token", AccessToken },
                 } );
 
                 using var response = await _httpClient.PostAsync( url, content, cancellationToken );
@@ -159,11 +269,11 @@ namespace Meta {
                     payload[ "schema" ] = schemas;
                     payload[ "data" ] = data;
                 
-                    string url = $"https://graph.facebook.com/v16.0/{customAudienceId}/users";
+                    string url = $"https://graph.facebook.com/v20.0/{customAudienceId}/users";
 
                     var content = new FormUrlEncodedContent( new Dictionary< string, string >( ) { 
                         { "payload", Newtonsoft.Json.JsonConvert.SerializeObject( payload ) },
-                        { "access_token", _accessToken },
+                        { "access_token", AccessToken },
                     } );
 
                     using var result = await _httpClient.PostAsync( url, content, cancellationToken );
@@ -211,11 +321,11 @@ namespace Meta {
 
                         ++currentBatchId;
 
-                        string url = $"https://graph.facebook.com/v16.0/{customAudienceId}/users";
+                        string url = $"https://graph.facebook.com/v20.0/{customAudienceId}/users";
 
                         var content = new FormUrlEncodedContent( new Dictionary< string, string >( ) { 
                             { "payload", Newtonsoft.Json.JsonConvert.SerializeObject( payload ) },
-                            { "access_token", _accessToken },
+                            { "access_token", AccessToken },
                             { "session", Newtonsoft.Json.JsonConvert.SerializeObject( session ) },
                         } );
 
@@ -265,12 +375,29 @@ namespace Meta {
             }
 
             struct EnumerateCustomAudiencesResponse {
-
                 [ JsonProperty( "data" ) ] public AudienceInfo [ ]Data;
             }
 
+            struct InsightsResponse {
+                public struct Response {
+                    public struct Action {
+                        [ JsonProperty( "action_type" ) ] public string ActionType;
+                        [ JsonProperty( "value" ) ] public ulong Value;
+                    }
+
+                    [ JsonProperty( "spend", DefaultValueHandling = DefaultValueHandling.Populate ) ] public double Spend;
+                    [ JsonProperty( "impressions", DefaultValueHandling = DefaultValueHandling.Populate ) ] public ulong Impressions;
+                    [ JsonProperty( "reach", DefaultValueHandling = DefaultValueHandling.Populate ) ] public ulong Reach;
+                    [ JsonProperty( "actions" ) ] public Action [ ]Actions;
+                    [ JsonProperty( "outbound_clicks" ) ] public Action [ ]OutboundClicks;
+
+                }
+
+                [ JsonProperty( "data" ) ] public Response [ ]Data;
+            }
+
             string _accountId;
-            string _accessToken;
+            public string AccessToken;
 
             HttpClient _httpClient = new HttpClient( );
 
